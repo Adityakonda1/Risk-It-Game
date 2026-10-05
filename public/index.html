@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Risk It</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+:root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#f8fafc;background:#080b14}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#20254a,#080b14 55%);min-height:100vh}
+main{max-width:980px;margin:auto;padding:24px 16px 40px}.brand{font-size:42px;font-weight:900;letter-spacing:-2px}.sub{color:#aab2c5;margin-bottom:22px}
+.card{background:rgba(18,23,40,.92);border:1px solid #303850;border-radius:22px;padding:22px;margin:14px 0;box-shadow:0 15px 50px #0005}
+input,select,button{font:inherit;border-radius:12px;border:1px solid #3a435c;padding:13px 15px}
+input,select{width:100%;background:#0d1220;color:white;margin:7px 0}
+button{background:#7567ff;color:white;font-weight:800;cursor:pointer;min-height:46px}
+button.secondary{background:#151b2d}button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:130px}
+.big{font-size:28px;font-weight:900}.muted{color:#9ca6bb}.code{font-size:42px;letter-spacing:9px;font-weight:900}
+.players{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.player{padding:14px;border:1px solid #303850;border-radius:15px;background:#11172a}
+.score{font-size:24px;font-weight:900}.pill{display:inline-block;padding:5px 9px;border-radius:99px;background:#252d46;color:#cbd5ff;font-size:12px}
+.answers{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}
+.answers button{min-height:72px;background:#151d34;text-align:left}
+.answers button.selected{outline:3px solid #7567ff;background:#25224d}
+.risks{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.risks button{background:#202940}
+.timer{font-size:48px;font-weight:900;text-align:center;margin:8px}
+.center{text-align:center}.danger{color:#ff8e8e}.good{color:#75e2a8}
+@media(max-width:600px){.brand{font-size:34px}.answers{grid-template-columns:1fr}.risks{grid-template-columns:1fr 1fr}.code{font-size:34px}}
+</style>
+</head>
+<body><main>
+<div class="brand">RISK IT</div><div class="sub">Think smart. Wager boldly. Survive the leaderboard.</div>
+<div id="app"></div>
+</main>
+<script>
+const socket=io(); let state=null, myId=null, selectedAnswer=null, wager=null, timer=null;
+const app=document.getElementById("app");
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+socket.on("connect",()=>myId=socket.id);
+socket.on("roomCreated",x=>{location.hash=x.code});
+socket.on("errorMsg",x=>alert(x));
+socket.on("state",s=>{state=s; render();});
+
+function me(){return state?.players.find(p=>p.id===myId)}
+function render(){
+ if(!state){ app.innerHTML=`
+ <div class="card"><h2>Create a room</h2><input id="name" placeholder="Your name" maxlength="18">
+ <select id="mode"><option value="mixed">Mixed</option><option>General Knowledge</option><option>Fun & Chaotic</option><option>Classroom</option><option>Custom Questions</option></select>
+ <button id="create">Create Room</button></div>
+ <div class="card"><h2>Join a room</h2><input id="joinName" placeholder="Your name" maxlength="18"><input id="room" placeholder="ROOM CODE" maxlength="4">
+ <button id="join">Join Game</button></div>`;
+ document.getElementById("create").onclick=()=>socket.emit("create",{name:document.getElementById("name").value,mode:document.getElementById("mode").value});
+ document.getElementById("join").onclick=()=>socket.emit("join",{name:document.getElementById("joinName").value,code:document.getElementById("room").value}); return;
+ }
+ const p=me(); if(!p)return;
+ const board=[...state.players].sort((a,b)=>b.score-a.score).map((x,i)=>`<div class="player"><span class="pill">#${i+1}</span> <b>${esc(x.name)}</b><div class="score">${x.score.toLocaleString()}</div>${x.eliminated?'<span class="danger">ELIMINATED</span>':''}</div>`).join("");
+ if(state.status==="lobby"){app.innerHTML=`<div class="card center"><div class="muted">ROOM CODE</div><div class="code">${state.code}</div><p>Share this code with your friends.</p><p>${state.players.length}/8 players</p>${state.hostId===myId?`<button id="start" ${state.players.length<2?"disabled":""}>Start Game · 30s Countdown</button>`:"<div class='muted'>Waiting for the host to start…</div>"}</div><div class="card"><h3>Leaderboard</h3><div class="players">${board}</div></div>`;
+ if(state.hostId===myId)document.getElementById("start").onclick=()=>socket.emit("start"); return}
+ if(state.status==="countdown"){const left=Math.max(0,Math.ceil((state.countdownUntil-Date.now())/1000));app.innerHTML=`<div class="card center"><div class="muted">ROOM ${state.code}</div><div class="timer">${left}</div><div class="big">Get ready!</div><p>${state.players.length} players are in.</p></div><div class="card"><div class="players">${board}</div></div>`;return}
+ if(state.status==="question"){const q=state.question;const total=q.timer;const elapsed=Math.floor((Date.now()-state.questionStartedAt)/1000);const left=Math.max(0,total-elapsed);clearInterval(timer);timer=setInterval(render,1000);
+ let html=`<div class="card"><div class="row"><div><span class="pill">ROUND ${state.round}/8</span></div><div style="text-align:right"><span class="pill">TIME ${left}s</span></div></div><h2>${esc(q.q)}</h2>`;
+ if(!wager) html+=`<p class="muted">Choose your secret risk first.</p><div class="risks">${[.1,.25,.5,1].map(x=>`<button data-risk="${x}">${x*100}% · ${Math.round(p.score*x).toLocaleString()} pts</button>`).join("")}</div>`;
+ else {html+=`<p class="good">Risk locked: ${wager.toLocaleString()} points</p>`; if(q.type==="mc")html+=`<div class="answers">${q.a.map((x,i)=>`<button class="${selectedAnswer===i?'selected':''}" data-answer="${i}">${String.fromCharCode(65+i)}. ${esc(x)}</button>`).join("")}</div>`;else html+=`<input id="textAnswer" placeholder="Type your answer…" value="${selectedAnswer||""}"><button id="submitText">Submit answer</button>`}
+ html+=`</div><div class="card"><h3>Live leaderboard</h3><div class="players">${board}</div></div>`;app.innerHTML=html;
+ document.querySelectorAll("[data-risk]").forEach(b=>b.onclick=()=>{wager=Math.round(p.score*Number(b.dataset.risk));socket.emit("wager",Number(b.dataset.risk));render()});
+ document.querySelectorAll("[data-answer]").forEach(b=>b.onclick=()=>{selectedAnswer=Number(b.dataset.answer);socket.emit("answer",selectedAnswer);render()});
+ const ta=document.getElementById("submitText");if(ta)ta.onclick=()=>{selectedAnswer=document.getElementById("textAnswer").value;socket.emit("answer",selectedAnswer)};
+ return}
+ if(state.status==="reveal"){wager=null;selectedAnswer=null;app.innerHTML=`<div class="card center"><div class="pill">ROUND ${state.round} COMPLETE</div><h1>Scores updated</h1><p class="muted">Next round coming up…</p></div><div class="card"><div class="players">${board}</div></div>`;return}
+ if(state.status==="final_wager"){app.innerHTML=`<div class="card center"><div class="pill">FINAL</div><h1>RISK IT ALL</h1><p>Wager any amount up to your current score.</p><input id="final" type="number" min="0" max="${p.score}" value="${Math.floor(p.score/2)}"><button id="fw">Lock Final Wager</button><p class="muted">After locking, answer: <b>YES</b> if you believe you can win, otherwise <b>NO</b>.</p></div><div class="card"><div class="players">${board}</div></div>`;
+ document.getElementById("fw").onclick=()=>{socket.emit("finalWager",Number(document.getElementById("final").value));document.getElementById("fw").disabled=true;setTimeout(()=>{if(confirm("Answer the final challenge correctly? Press OK for CORRECT, Cancel for WRONG."))socket.emit("finalAnswer","correct");else socket.emit("finalAnswer","wrong")},200)};return}
+ if(state.status==="finished"){app.innerHTML=`<div class="card center"><div class="pill">GAME OVER</div><h1>🏆 ${esc(state.winner?.name||"Winner")}</h1><div class="big">${(state.winner?.score||0).toLocaleString()} points</div><p>Thanks for playing Risk It!</p></div><div class="card"><h3>Final leaderboard</h3><div class="players">${board}</div></div>`}
+}
+render();
+</script>
+</body></html>
